@@ -170,8 +170,37 @@ redraw(void)
 }
 
 static void
+emitclose(u32int id, u32int reason)
+{
+	CloseEv ev;
+
+	ev.id = id;
+	ev.reason = reason;
+	nbsend(closec, &ev);
+}
+
+static void
 push(Noti *n)
 {
+	int i;
+	CloseEv ev;
+
+	if(n->id != 0){
+		for(i = 0; i < count; i++){
+			if(notifs[nth(i)].id == n->id){
+				notifs[nth(i)] = *n;
+				createdat[nth(i)] = nsec() + (vlong)timeout * 1000000LL;
+				expanded[nth(i)] = 0;
+				redraw();
+				return;
+			}
+		}
+	}
+	if(count == Maxnotify){
+		ev.id = notifs[head].id;
+		ev.reason = 4;
+		nbsend(closec, &ev);
+	}
 	notifs[head] = *n;
 	createdat[head] = nsec() + (vlong)timeout * 1000000LL;
 	expanded[head] = 0;
@@ -186,10 +215,12 @@ push(Noti *n)
 }
 
 static void
-hide(int slot)
+hide(int slot, int reason)
 {
 	if(slot < 0 || slot >= count)
 		return;
+	if(reason > 0)
+		emitclose(notifs[nth(slot)].id, reason);
 	for(; slot < count - 1; slot++){
 		notifs[nth(slot)] = notifs[nth(slot + 1)];
 		createdat[nth(slot)] = createdat[nth(slot + 1)];
@@ -198,6 +229,19 @@ hide(int slot)
 	head = (head - 1 + Maxnotify) % Maxnotify;
 	count--;
 	redraw();
+}
+
+static void
+closebyid(u32int id)
+{
+	int i;
+
+	for(i = 0; i < count; i++){
+		if(notifs[nth(i)].id == id){
+			hide(i, 3);
+			return;
+		}
+	}
 }
 
 static void
@@ -213,6 +257,7 @@ delexpired(void)
 			break;
 		if(createdat[nth(0)] >= now)
 			break;
+		emitclose(notifs[nth(0)].id, 1);
 		count--;
 	}
 	if(count != c0)
@@ -257,6 +302,7 @@ notithread(void*)
 	Noti n;
 	xcb_generic_event_t *ev;
 	xcb_button_press_event_t *be;
+	u32int closeid;
 	int slot;
 
 	threadsetname("noti");
@@ -271,7 +317,7 @@ notithread(void*)
 						expanded[nth(slot)] = !expanded[nth(slot)];
 						redraw();
 					} else if(be->detail == 3){
-						hide(slot);
+						hide(slot, 2);
 					}
 				}
 			}
@@ -279,6 +325,8 @@ notithread(void*)
 		}
 		while(nbrecv(notic, &n) > 0)
 			push(&n);
+		while(nbrecv(closereqc, &closeid) > 0)
+			closebyid(closeid);
 		delexpired();
 		sleep(100);
 	}

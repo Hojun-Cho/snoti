@@ -3,6 +3,8 @@
 #include "fn.h"
 
 Channel *notic;
+Channel *closec;
+Channel *closereqc;
 char *fontpath = "font";
 char *soundpath = nil;
 int maxshow = 4;
@@ -69,6 +71,8 @@ threadmain(int argc, char **argv)
 		fontpath = argv[0];
 	signal(SIGCHLD, SIG_IGN);
 	notic = chancreate(sizeof(Noti), 4);
+	closec = chancreate(sizeof(CloseEv), 32);
+	closereqc = chancreate(sizeof(u32int), 8);
 	proccreate(notithread, nil, 16384);
 	proccreate(dbusthread, nil, 16384);
 

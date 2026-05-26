@@ -32,11 +32,21 @@ struct Str
 typedef struct Noti Noti;
 struct Noti
 {
+	u32int	id;
 	Str	summary;
 	Str	body;
 };
 
+typedef struct CloseEv CloseEv;
+struct CloseEv
+{
+	u32int	id;
+	u32int	reason;
+};
+
 extern Channel *notic;
+extern Channel *closec;
+extern Channel *closereqc;
 extern char *fontpath;
 extern char *soundpath;
 extern int maxshow;
