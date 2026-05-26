@@ -10,10 +10,13 @@ enum
 
 	Maxnotify	= 16,
 
+	Lineh		= Fontsz,
+
 	Winw		= 300,
 	Winh		= 80,
 	Margin		= 20,
 	Padding		= 10,
+	Gap		= 10,
 
 	Colfg		= 0x000000,
 	Colbg		= 0xffffea,

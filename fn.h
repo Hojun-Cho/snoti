@@ -8,3 +8,4 @@ void	notithread(void*);
 
 void	fontinit(char*);
 void	putfont(u32int*, int, int, int, int, Rune);
+int	fontadvance(Rune);

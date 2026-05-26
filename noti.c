@@ -8,7 +8,9 @@ static xcb_window_t wins[Maxnotify];
 static xcb_gcontext_t gc;
 static Noti notifs[Maxnotify];
 static vlong createdat[Maxnotify];
+static int expanded[Maxnotify];
 static u32int *img;
+static int imgcap;
 static int depth;
 static int head, count;
 
@@ -18,52 +20,151 @@ nth(int i)
 	return (head - count + i + Maxnotify) % Maxnotify;
 }
 
-static void
-draw(Noti *n)
+static int
+wraplines(Rune *r, int n, int maxw)
 {
-	int i, x;
+	int i, x, adv, lines;
 
-	for(i = 0; i < Winw * Winh; i++)
-		img[i] = Colbg;
-	x = Padding;
-	for(i = 0; i < n->summary.n && x < Winw - Padding; i++){
-		putfont(img, Winw, Winh, x, Padding, n->summary.r[i]);
-		x += Fontsz / 2;
+	if(n <= 0)
+		return 0;
+	x = 0;
+	lines = 1;
+	for(i = 0; i < n; i++){
+		adv = fontadvance(r[i]);
+		if(x + adv > maxw && x > 0){
+			x = 0;
+			lines++;
+		}
+		x += adv;
 	}
-	x = Padding;
-	for(i = 0; i < n->body.n && x < Winw - Padding; i++){
-		putfont(img, Winw, Winh, x, Padding + Fontsz, n->body.r[i]);
-		x += Fontsz / 2;
+	return lines;
+}
+
+static int
+notiheight(int slot)
+{
+	int textw, sl, bl, h;
+	Noti *n;
+
+	if(!expanded[nth(slot)])
+		return Winh;
+	n = &notifs[nth(slot)];
+	textw = Winw - 2*Padding;
+	sl = wraplines(n->summary.r, n->summary.n, textw);
+	bl = wraplines(n->body.r, n->body.n, textw);
+	if(sl < 1) sl = 1;
+	if(bl < 1) bl = 1;
+	h = 2*Padding + (sl + bl) * Lineh;
+	if(h < Winh)
+		h = Winh;
+	return h;
+}
+
+static void
+drawline(u32int *buf, int w, int h, int x, int y, Rune *r, int n, int maxw)
+{
+	int i, adv, used, ellaw;
+
+	used = 0;
+	for(i = 0; i < n; i++)
+		used += fontadvance(r[i]);
+	if(used <= maxw){
+		for(i = 0; i < n; i++){
+			putfont(buf, w, h, x, y, r[i]);
+			x += fontadvance(r[i]);
+		}
+		return;
+	}
+	ellaw = fontadvance(0x2026);
+	used = 0;
+	for(i = 0; i < n; i++){
+		adv = fontadvance(r[i]);
+		if(used + adv + ellaw > maxw)
+			break;
+		putfont(buf, w, h, x, y, r[i]);
+		x += adv;
+		used += adv;
+	}
+	putfont(buf, w, h, x, y, 0x2026);
+}
+
+static void
+drawwrap(u32int *buf, int w, int h, int x0, int y0, Rune *r, int n, int maxw)
+{
+	int i, x, y, adv;
+
+	x = x0;
+	y = y0;
+	for(i = 0; i < n; i++){
+		adv = fontadvance(r[i]);
+		if(x + adv > x0 + maxw && x > x0){
+			x = x0;
+			y += Lineh;
+		}
+		if(y >= h)
+			break;
+		putfont(buf, w, h, x, y, r[i]);
+		x += adv;
+	}
+}
+
+static void
+draw(Noti *n, int wh, int isexpanded)
+{
+	int i, total, textw, y, sl;
+
+	total = Winw * wh;
+	if(total > imgcap){
+		free(img);
+		img = emalloc(total * sizeof(u32int));
+		imgcap = total;
+	}
+	for(i = 0; i < total; i++)
+		img[i] = Colbg;
+	textw = Winw - 2*Padding;
+	y = Padding;
+	if(isexpanded){
+		sl = wraplines(n->summary.r, n->summary.n, textw);
+		if(sl < 1) sl = 1;
+		drawwrap(img, Winw, wh, Padding, y, n->summary.r, n->summary.n, textw);
+		y += sl * Lineh;
+		drawwrap(img, Winw, wh, Padding, y, n->body.r, n->body.n, textw);
+	} else {
+		drawline(img, Winw, wh, Padding, y, n->summary.r, n->summary.n, textw);
+		y += Lineh;
+		drawline(img, Winw, wh, Padding, y, n->body.r, n->body.n, textw);
 	}
 }
 
 static void
 redraw(void)
 {
-	int i, x, y;
+	int i, x, y, wh;
 	u32int mask, vals[3];
 
-	for(i = 0; i < maxshow; i++){
+	for(i = 0; i < Maxnotify; i++){
 		if(wins[i]){
 			xcb_destroy_window(xconn, wins[i]);
 			wins[i] = 0;
 		}
 	}
+	y = Margin;
 	for(i = 0; i < count && i < maxshow; i++){
+		wh = notiheight(i);
 		x = scr->width_in_pixels - Winw - Margin;
-		y = Margin + i * (Winh + 10);
 		wins[i] = xcb_generate_id(xconn);
 		mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
 		vals[0] = Colbg;
 		vals[1] = 1;
 		vals[2] = XCB_EVENT_MASK_BUTTON_PRESS;
 		xcb_create_window(xconn, XCB_COPY_FROM_PARENT, wins[i], scr->root,
-			x, y, Winw, Winh, 1,
+			x, y, Winw, wh, 1,
 			XCB_WINDOW_CLASS_INPUT_OUTPUT, scr->root_visual, mask, vals);
 		xcb_map_window(xconn, wins[i]);
-		draw(&notifs[nth(i)]);
+		draw(&notifs[nth(i)], wh, expanded[nth(i)]);
 		xcb_put_image(xconn, XCB_IMAGE_FORMAT_Z_PIXMAP, wins[i], gc,
-			Winw, Winh, 0, 0, 0, depth, Winw * Winh * 4, (u8int*)img);
+			Winw, wh, 0, 0, 0, depth, Winw * wh * 4, (u8int*)img);
+		y += wh + Gap;
 	}
 	xcb_flush(xconn);
 }
@@ -73,6 +174,7 @@ push(Noti *n)
 {
 	notifs[head] = *n;
 	createdat[head] = nsec() + (vlong)timeout * 1000000LL;
+	expanded[head] = 0;
 	head = (head + 1) % Maxnotify;
 	if(count < Maxnotify)
 		count++;
@@ -91,7 +193,9 @@ hide(int slot)
 	for(; slot < count - 1; slot++){
 		notifs[nth(slot)] = notifs[nth(slot + 1)];
 		createdat[nth(slot)] = createdat[nth(slot + 1)];
+		expanded[nth(slot)] = expanded[nth(slot + 1)];
 	}
+	head = (head - 1 + Maxnotify) % Maxnotify;
 	count--;
 	redraw();
 }
@@ -100,14 +204,19 @@ static void
 delexpired(void)
 {
 	vlong now;
+	int c0;
 
 	now = nsec();
+	c0 = count;
 	while(count > 0){
+		if(expanded[nth(0)])
+			break;
 		if(createdat[nth(0)] >= now)
 			break;
 		count--;
 	}
-	redraw();
+	if(count != c0)
+		redraw();
 }
 
 static int
@@ -139,7 +248,6 @@ wininit(void)
 	depth = scr->root_depth;
 	gc = xcb_generate_id(xconn);
 	xcb_create_gc(xconn, gc, scr->root, 0, nil);
-	img = emalloc(Winw * Winh * sizeof(u32int));
 	fontinit(fontpath);
 }
 
@@ -148,6 +256,7 @@ notithread(void*)
 {
 	Noti n;
 	xcb_generic_event_t *ev;
+	xcb_button_press_event_t *be;
 	int slot;
 
 	threadsetname("noti");
@@ -155,9 +264,16 @@ notithread(void*)
 	for(;;){
 		while((ev = xcb_poll_for_event(xconn)) != nil){
 			if((ev->response_type & ~0x80) == XCB_BUTTON_PRESS){
-				slot = findslotbywin(((xcb_button_press_event_t*)ev)->event);
-				if(slot >= 0)
-					hide(slot);
+				be = (xcb_button_press_event_t*)ev;
+				slot = findslotbywin(be->event);
+				if(slot >= 0){
+					if(be->detail == 1){
+						expanded[nth(slot)] = !expanded[nth(slot)];
+						redraw();
+					} else if(be->detail == 3){
+						hide(slot);
+					}
+				}
 			}
 			free(ev);
 		}

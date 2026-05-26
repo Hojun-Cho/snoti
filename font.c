@@ -7,7 +7,7 @@ typedef struct Glyph Glyph;
 struct Glyph
 {
 	uchar *bmp;
-	int w, h, ox, oy;
+	int w, h, ox, oy, adv;
 };
 
 enum { Maxfonts = 4 };
@@ -89,26 +89,50 @@ fontinit(char *dir)
 		blendtab[a] = blend(Colbg, Colfg, a);
 }
 
+static Glyph *
+loadglyph(Rune r)
+{
+	Glyph *g;
+	int f, gi, aw, lsb;
+
+	if(r >= Nglyphs)
+		return nil;
+	g = &cache[r];
+	if(g->adv != 0)
+		return g;
+	for(f = 0; f < nfonts; f++){
+		gi = stbtt_FindGlyphIndex(&fonts[f], r);
+		if(gi == 0)
+			continue;
+		stbtt_GetGlyphHMetrics(&fonts[f], gi, &aw, &lsb);
+		g->bmp = stbtt_GetCodepointBitmap(&fonts[f], scale[f], scale[f], r, &g->w, &g->h, &g->ox, &g->oy);
+		g->adv = (int)(aw * scale[f] + 0.5);
+		if(g->adv < 1)
+			g->adv = 1;
+		return g;
+	}
+	g->adv = Fontsz / 2;
+	return g;
+}
+
+int
+fontadvance(Rune r)
+{
+	Glyph *g;
+
+	g = loadglyph(r);
+	return g != nil ? g->adv : Fontsz / 2;
+}
+
 void
 putfont(u32int *buf, int w, int h, int px, int py, Rune r)
 {
 	Glyph *g;
-	int i, j, x, y, a, f;
+	int i, j, x, y, a;
 
-	if(r >= Nglyphs)
+	g = loadglyph(r);
+	if(g == nil || g->bmp == nil)
 		return;
-	g = &cache[r];
-	if(g->bmp == nil){
-		for(f = 0; f < nfonts; f++){
-			if(stbtt_FindGlyphIndex(&fonts[f], r) == 0)
-				continue;
-			g->bmp = stbtt_GetCodepointBitmap(&fonts[f], scale[f], scale[f], r, &g->w, &g->h, &g->ox, &g->oy);
-			if(g->bmp != nil)
-				break;
-		}
-		if(g->bmp == nil)
-			return;
-	}
 	for(j = 0; j < g->h; j++){
 		y = py + j + g->oy + Fontsz - Fontbase;
 		if(y < 0 || y >= h)
